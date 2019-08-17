@@ -95,9 +95,7 @@ class Event:
             timeOfDay = datetime.strptime(timeOfDay, '%I:%M %p')
             hour = int(datetime.strftime(timeOfDay, '%H'))
             minutes = int(datetime.strftime(timeOfDay, '%M'))
-            self.timeOfDay = str(hour) + '.' + str(minutes)
         else:
-            self.title = soup.find_all('title')
             monthsFound = soup.find_all('span', class_='_5a4-')
             for month in monthsFound:
                 month = re.sub('<span' + r'.*?>', '', str(month))
@@ -113,9 +111,11 @@ class Event:
             first = eventinfo.group()
             first = first.split('","')
             startDate = first[0].split('T')[1].split(':00+')[0].split(':')
+            self.title = first[2].split(':"')[1]
             hour = int(startDate[0])
             minutes = int(startDate[1])
-
+        
+        self.timeOfDay = str(hour) + '.' + str(minutes)
         self.url = url
         self.eventID = re.sub('http' + r'.*?' + 'events/', '', self.url)
 
@@ -183,6 +183,7 @@ class EventFactory:
 
         original = response.meta.get('original')
         positionFromMap = self.getPositionFromMap(html_str)
+        
         parsedEvent = Event(original, response.url, soup, summaries, positionFromMap, self.displayName)
         event = parsedEvent.toItem()
 
@@ -230,16 +231,25 @@ class FacebookEventSpider(scrapy.Spider):
     top_url = 'https://m.facebook.com/'
     start_urls = ( top_url, )
 
-    def __init__(self, page, *args, **kwargs):
-        self.displayName = page[0].strip()
-        self.target_username = page[2].strip()
+    def __init__(self, displayName, target_username, eventID):
+        self.displayName = displayName
+        self.target_username = target_username
+        self.eventID = eventID
 
     def parse(self, response):
-        try: 
-            url = '{top_url}/{username}/events/'.format(top_url=self.top_url, username=self.target_username)
-            return scrapy.Request(url, callback=self._get_facebook_events_ajax)
-        except Exception as e:
-            print(e)
+        if (self.eventID):
+           eventFactory = EventFactory(self.displayName, self.target_username)
+        
+           formattedEvent = eventFactory.formatAsEvent('')
+           url = urljoin(self.top_url, 'events/' + self.eventID)
+           yield scrapy.Request(url, callback=eventFactory.parseSingleEvent, meta={'original': formattedEvent})
+
+        else:
+            try: 
+                url = '{top_url}/{username}/events/'.format(top_url=self.top_url, username=self.target_username)
+                return scrapy.Request(url, callback=self._get_facebook_events_ajax)
+            except Exception as e:
+                print(e)
 
     def _get_facebook_events_ajax(self, response):
         page_id = re.search(re.compile(r'page_id=(\d*)'), str(response.body)).group(1)
@@ -271,9 +281,11 @@ class FacebookEventSpider(scrapy.Spider):
 def getPages():
     if runningLocally:
         return [
-            'Oslo Søndre Nordstrand;Rødt Oslo; RoedtSondreNordstrand',
-            'Oslo Skole og Barnehage;Rødt Oslo;',
-            'Rødt;;Roedt'
+#            'Oslo Søndre Nordstrand;Rødt Oslo; RoedtSondreNordstrand',
+ #           'Oslo Skole og Barnehage;Rødt Oslo;',
+            'Rødt;;Roedt',
+            'Rødt Bergen;;rodtbergen',
+            'Rødt Tromsø;;rodttromso'
         ]
     now = int(datetime.now().strftime('%H'))
     if now % 2 == 0:
@@ -296,10 +308,15 @@ def fetch():
         singlePage = page.split(';')
         singlePage[0] = 'Rødt ' + singlePage[0]
         if len(singlePage) == 3 and singlePage[2].strip():
-            runner.crawl(FacebookEventSpider, page=singlePage)
+            runner.crawl(FacebookEventSpider, displayName=singlePage[0].strip(), target_username=singlePage[2].strip(), eventID=None)
+
+    specificEventIDs = [['rodttromso','340794273274895']]
+   # for eventID in specificEventIDs:
+  #      runner.crawl(FacebookEventSpider, displayName=None, target_username=eventID[0], eventID=eventID[1])
+
     d = runner.join()
     d.addBoth(lambda _: reactor.stop())
-    reactor.run()
+    reactor.run()   
 
 def run(d, f):
     fetch()
